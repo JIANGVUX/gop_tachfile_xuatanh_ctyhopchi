@@ -33,7 +33,12 @@ except Exception:
 # =====================================================================
 # CẤU HÌNH CHUNG
 # =====================================================================
-st.set_page_config(page_title="Công cụ chấm công", layout="wide")
+st.set_page_config(
+    page_title="Công cụ chấm công",
+    page_icon="🗂️",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 
 # Cache Chromium của pyppeteer vào HOME để ổn định trên Streamlit Cloud
 os.environ.setdefault("PYPPETEER_HOME", str(Path.home() / ".cache" / "pyppeteer"))
@@ -49,12 +54,149 @@ TC ngày CN 200% = T/ca giờ ngày CN
 TC đêm CN 270% = T/Ca giờ đêm CN
 """
 
-MODE_1 = "1️⃣ Tách file chấm công"
-MODE_2 = "2️⃣ Xuất bảng công ra ảnh"
+MODE_1 = "📂 Tách file chấm công"
+MODE_2 = "🖼️ Xuất bảng công ra ảnh"
+MODE_HINT = {
+    MODE_1: "Từ file chấm công gốc, tạo 1 file Excel mới trong đó mỗi nhân viên có 1 sheet riêng.",
+    MODE_2: "Từ file Excel tổng hợp, xuất mỗi sheet thành 1 ảnh PNG và nén tất cả thành 1 file ZIP.",
+}
 
 
 # =====================================================================
-# HÀM DÙNG CHO CHỨC NĂNG 1: TÁCH FILE CHẤM CÔNG
+# GIAO DIỆN (CSS + THÀNH PHẦN DÙNG CHUNG)
+# =====================================================================
+APP_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap');
+
+:root{
+  --ink:#14232B; --muted:#5B6B73; --line:#DDE4E8; --bg:#F4F6F7; --surface:#FFFFFF;
+  --brand:#0F766E; --brand-dark:#0B5A54; --brand-soft:#E3F3F1;
+  --warn:#92400E; --warn-soft:#FEF3C7;
+}
+
+.stApp, .stApp p, .stApp label, .stApp li, .stApp h1, .stApp h2, .stApp h3, .stApp h4,
+.stApp button, .stApp input, .stApp textarea, .stApp .stMarkdown{
+  font-family:'Be Vietnam Pro', system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+}
+.stApp{ background:var(--bg); color:var(--ink); }
+.block-container{ max-width:1080px; padding-top:1.6rem; padding-bottom:4rem; }
+
+/* Ẩn phần thừa của Streamlit */
+#MainMenu, footer{ visibility:hidden; }
+header[data-testid="stHeader"]{ background:transparent; }
+section[data-testid="stSidebar"], [data-testid="collapsedControl"]{ display:none; }
+
+/* Tiêu đề */
+.hero{ margin:0 0 1.1rem 0; }
+.hero-title{ font-size:2rem; font-weight:800; letter-spacing:-.02em; line-height:1.15; color:var(--ink); }
+.hero-sub{ margin-top:.4rem; color:var(--muted); font-size:1rem; max-width:62ch; line-height:1.55; }
+
+/* Nút chuyển chức năng (radio dạng tab) */
+div[data-testid="stRadio"] div[role="radiogroup"]{
+  display:inline-flex; flex-wrap:wrap; gap:.25rem; background:#E5EBEE;
+  padding:.3rem; border-radius:14px;
+}
+div[data-testid="stRadio"] div[role="radiogroup"] > label{
+  margin:0; padding:.55rem 1.15rem; border-radius:11px; cursor:pointer; transition:background .15s;
+}
+div[data-testid="stRadio"] div[role="radiogroup"] > label > div:first-child{ display:none; }
+div[data-testid="stRadio"] div[role="radiogroup"] > label p{ font-weight:600; font-size:.97rem; color:var(--muted); }
+div[data-testid="stRadio"] div[role="radiogroup"] > label:has(input:checked){
+  background:var(--surface); box-shadow:0 1px 3px rgba(20,35,43,.14);
+}
+div[data-testid="stRadio"] div[role="radiogroup"] > label:has(input:checked) p{ color:var(--ink); }
+.mode-hint{ margin:.6rem 0 0 .2rem; color:var(--muted); font-size:.95rem; }
+
+/* Các bước */
+.step{ display:flex; gap:.8rem; align-items:flex-start; margin:2rem 0 .7rem 0; }
+.step-n{
+  flex:none; width:1.9rem; height:1.9rem; border-radius:50%; background:var(--ink); color:#fff;
+  font-weight:700; font-size:.92rem; display:flex; align-items:center; justify-content:center; margin-top:.1rem;
+}
+.step-t{ font-weight:700; font-size:1.2rem; line-height:1.3; color:var(--ink); }
+.step-d{ color:var(--muted); font-size:.93rem; margin-top:.1rem; }
+
+/* Ô thống kê */
+.stats{ display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:.75rem; margin:.4rem 0 1rem 0; }
+.stat{ background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:.9rem 1.1rem; }
+.stat-v{ font-size:1.7rem; font-weight:800; letter-spacing:-.02em; color:var(--ink); line-height:1.1; }
+.stat-l{ color:var(--muted); font-size:.88rem; margin-top:.25rem; }
+.stat.good{ background:var(--brand-soft); border-color:#BFE3DE; }
+.stat.good .stat-v{ color:var(--brand-dark); }
+.stat.warn{ background:var(--warn-soft); border-color:#F6DE8D; }
+.stat.warn .stat-v{ color:var(--warn); }
+
+/* Khung tải file */
+section[data-testid="stFileUploaderDropzone"]{
+  border:2px dashed #8FC5BF; background:#FFFFFF; border-radius:16px; padding:1.4rem 1.2rem;
+}
+section[data-testid="stFileUploaderDropzone"]:hover{ border-color:var(--brand); background:var(--brand-soft); }
+[data-testid="stFileUploaderDropzoneInstructions"] span{ display:none; }
+[data-testid="stFileUploaderDropzoneInstructions"]::before{
+  content:"Kéo thả file Excel (.xlsx) vào đây"; font-weight:600; font-size:1rem; color:var(--ink);
+}
+section[data-testid="stFileUploaderDropzone"] button{ font-size:0; border-radius:10px; }
+section[data-testid="stFileUploaderDropzone"] button::after{ content:"Chọn file"; font-size:.92rem; font-weight:600; }
+
+/* Nút bấm */
+.stButton > button, .stDownloadButton > button{
+  border-radius:11px; font-weight:600; padding:.55rem 1.2rem; border:1px solid var(--line);
+}
+button[data-testid="baseButton-primary"]{
+  background:var(--brand); border-color:var(--brand); color:#fff; padding:.7rem 1.5rem; font-size:1rem;
+}
+button[data-testid="baseButton-primary"]:hover{ background:var(--brand-dark); border-color:var(--brand-dark); color:#fff; }
+
+/* Khung gập, thông báo */
+div[data-testid="stExpander"]{ background:var(--surface); border:1px solid var(--line); border-radius:14px; }
+div[data-testid="stExpander"] summary{ font-weight:600; }
+div[data-testid="stAlert"]{ border-radius:12px; }
+div[data-testid="stVerticalBlockBorderWrapper"]{ border-radius:14px; }
+
+.footer-note{ margin-top:3rem; color:#8A989F; font-size:.85rem; text-align:center; }
+
+@media (max-width:640px){
+  .hero-title{ font-size:1.6rem; }
+  .block-container{ padding-left:1rem; padding-right:1rem; }
+}
+</style>
+"""
+
+
+def inject_css():
+    st.markdown(APP_CSS, unsafe_allow_html=True)
+
+
+def hero():
+    st.markdown(
+        '<div class="hero"><div class="hero-title">Công cụ chấm công</div>'
+        '<div class="hero-sub">Tách bảng chấm công theo từng nhân viên, sau đó xuất mỗi bảng thành ảnh để gửi đi.</div></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def step_header(n: int, title: str, desc: str = ""):
+    d = f'<div class="step-d">{html.escape(desc)}</div>' if desc else ""
+    st.markdown(
+        f'<div class="step"><div class="step-n">{n}</div>'
+        f'<div><div class="step-t">{html.escape(title)}</div>{d}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def stat_cards(items):
+    """items: list of (nhãn, giá trị, tone) — tone: '', 'good', 'warn'"""
+    cells = "".join(
+        f'<div class="stat {tone}"><div class="stat-v">{html.escape(str(val))}</div>'
+        f'<div class="stat-l">{html.escape(label)}</div></div>'
+        for label, val, tone in items
+    )
+    st.markdown(f'<div class="stats">{cells}</div>', unsafe_allow_html=True)
+
+
+# =====================================================================
+# CHỨC NĂNG 1: TÁCH FILE CHẤM CÔNG
 # =====================================================================
 def safe_excel_value(val):
     if pd.isna(val) or val is None:
@@ -88,10 +230,8 @@ def get_header_row_height(header, width=8):
     for cell in header:
         text = str(cell.value) if cell.value else ""
         line_len = max(1, int((width - 1) * 1.5))
-        num_lines = math.ceil(len(text) / line_len)
-        lines.append(num_lines)
-    max_lines = max(lines)
-    return max(24, max_lines * 15)
+        lines.append(math.ceil(len(text) / line_len))
+    return max(24, max(lines) * 15)
 
 
 def weekday_vn(date_val):
@@ -104,87 +244,73 @@ def weekday_vn(date_val):
         return ""
 
 
-def page_tach_file():
-    st.title("Tách file chấm công - production by Jiangvux")
-
-    uploaded_file = st.file_uploader(
-        "Chọn file Excel chấm công gốc (.xlsx)", type=["xlsx"], key="tach_uploader"
-    )
-    if uploaded_file is None:
-        st.info("Đưa file lên để tách nhé!")
-        return
-
-    # ---- CHỈ ĐỌC DATA TỪ NHỮNG SHEET CÓ TÊN BẮT ĐẦU BẰNG "CT" ----
-    xls = pd.ExcelFile(uploaded_file)
+@st.cache_data(show_spinner=False, max_entries=3)
+def load_attendance(file_bytes: bytes):
+    """Đọc các sheet 'CT...' và chuẩn hóa. Lỗi dữ liệu -> ValueError (thông báo tiếng Việt)."""
+    xls = pd.ExcelFile(BytesIO(file_bytes))
     ct_sheets = [s for s in xls.sheet_names if s.upper().startswith("CT")]
     if not ct_sheets:
-        st.error("Không tìm thấy sheet nào bắt đầu bằng 'CT' trong file Excel!")
-        return
+        raise ValueError("Không tìm thấy sheet nào có tên bắt đầu bằng “CT” trong file Excel.")
 
     df = pd.concat(
         [pd.read_excel(xls, sheet_name=s, header=5) for s in ct_sheets],
         ignore_index=True,
     )
 
-    st.write("Tên các cột:", list(df.columns))
-
     # Thêm cột Thứ (trước cột Ngày)
     if "Ngày" in df.columns and "Thứ" not in df.columns:
-        idx_ngay = df.columns.get_loc("Ngày")
-        df.insert(idx_ngay, "Thứ", df["Ngày"].apply(weekday_vn))
+        df.insert(df.columns.get_loc("Ngày"), "Thứ", df["Ngày"].apply(weekday_vn))
 
-    # Chuẩn hóa các cột thời gian về hh:mm
-    cols_time = [c for c in df.columns if any(k in str(c) for k in ["Vào", "Ra"])]
-    for col in cols_time:
+    # Chuẩn hóa cột giờ về hh:mm
+    for col in [c for c in df.columns if any(k in str(c) for k in ["Vào", "Ra"])]:
         df[col] = df[col].apply(to_hhmm)
 
-    # Làm tròn tự động cho các cột kiểu số
+    # Làm tròn các cột số
     for col in df.select_dtypes(include=[np.number]).columns:
         df[col] = df[col].apply(lambda x: round(x, 2) if pd.notna(x) else x)
 
-    vao_lan_1_col = next((c for c in df.columns if "Vào lần 1" in str(c)), None)
-    ra_lan_2_col = next((c for c in df.columns if "Ra lần 2" in str(c)), None)
-    if vao_lan_1_col is None or ra_lan_2_col is None:
-        st.error('Không tìm thấy cột "Vào lần 1" hoặc "Ra lần 2" trong file!')
-        return
-    idx_vao_lan_1 = df.columns.get_loc(vao_lan_1_col)
-    idx_ra_lan_2 = df.columns.get_loc(ra_lan_2_col)
-
+    vao = next((c for c in df.columns if "Vào lần 1" in str(c)), None)
+    ra = next((c for c in df.columns if "Ra lần 2" in str(c)), None)
+    if vao is None or ra is None:
+        raise ValueError("Không tìm thấy cột “Vào lần 1” hoặc “Ra lần 2”. Kiểm tra lại dòng tiêu đề (dòng 6) của sheet CT.")
     if "Mã NV" not in df.columns or "Họ tên" not in df.columns:
-        st.error('Thiếu cột "Mã NV" hoặc "Họ tên" trong file!')
-        return
+        raise ValueError("Thiếu cột “Mã NV” hoặc “Họ tên”. Kiểm tra lại dòng tiêu đề (dòng 6) của sheet CT.")
 
+    return df, ct_sheets, df.columns.get_loc(vao), df.columns.get_loc(ra)
+
+
+def build_employee_workbook(df, idx_vao_lan_1, idx_ra_lan_2, on_progress=None):
+    """Trả về (bytes, số nhân viên, số sheet có ô trống) hoặc None nếu không có dữ liệu."""
     groupby_obj = list(df.groupby(["Mã NV", "Họ tên"]))
-    total_nv = len(groupby_obj)
+    total_nv = max(len(groupby_obj), 1)
     count_nv = 0
     count_tab_vangnhat = 0
-    status = st.empty()
-    progress = st.progress(0)
+
     pale_yellow_fill = PatternFill(start_color="FFFACD", end_color="FFFACD", fill_type="solid")
     total_fill = PatternFill(start_color="FFD966", end_color="FFD966", fill_type="solid")
+    header_fill = PatternFill(start_color="FF8C1A", end_color="FF8C1A", fill_type="solid")
 
-    output = BytesIO()
     wb_new = openpyxl.Workbook()
     wb_new.remove(wb_new.active)
 
-    for (ma_nv, ho_ten), group in groupby_obj:
+    for i, ((ma_nv, ho_ten), group) in enumerate(groupby_obj, start=1):
+        if on_progress:
+            on_progress(i / total_nv, f"Đang xử lý {i}/{total_nv}: {ma_nv} - {ho_ten}")
+
         region = group.iloc[:, idx_vao_lan_1:]
-        arr = pd.Series(region.values.ravel()).astype(str).str.strip()
+        arr = pd.Series(region.values.ravel()).dropna().astype(str).str.strip()
         arr = arr[~arr.isin(["", "nan", "NaT", "None"])]
         if arr.empty:
             continue
 
         count_nv += 1
-        status.info(f"Đang xử lý nhân viên thứ {count_nv}/{total_nv}: **{ma_nv} - {ho_ten}**")
-        progress.progress(count_nv / total_nv)
-
         sheet_name = f"{ma_nv}_{ho_ten}".replace(" ", "_").replace("/", "_")[:31]
         ws_nv = wb_new.create_sheet(title=sheet_name)
         ws_nv.append([str(c) for c in group.columns])
         for row in group.itertuples(index=False):
             ws_nv.append([safe_excel_value(cell) for cell in row])
 
-        # Dòng tổng cuối sheet
+        # Dòng tổng
         total_row = []
         for col in group.columns:
             if group[col].dtype in [np.float64, np.int64, float, int]:
@@ -193,15 +319,13 @@ def page_tach_file():
             else:
                 total_row.append("TỔNG" if col == group.columns[0] else "")
         ws_nv.append(total_row)
-        last_row = ws_nv.max_row
-        for cell in ws_nv[last_row]:
+        for cell in ws_nv[ws_nv.max_row]:
             cell.fill = total_fill
             cell.font = Font(bold=True)
             cell.alignment = Alignment(wrap_text=True, vertical="center", horizontal="center")
 
         # Header
         header_row = ws_nv[1]
-        header_fill = PatternFill(start_color="FF8C1A", end_color="FF8C1A", fill_type="solid")
         for cell in header_row:
             cell.alignment = Alignment(wrap_text=True, vertical="center", horizontal="center")
             cell.font = Font(bold=True, color="FFFFFF")
@@ -209,17 +333,17 @@ def page_tach_file():
 
         ws_nv.freeze_panes = "A2"
 
-        for i, column_cells in enumerate(ws_nv.columns):
+        for ci, column_cells in enumerate(ws_nv.columns):
             letter = column_cells[0].column_letter
-            if i >= idx_vao_lan_1:
+            if ci >= idx_vao_lan_1:
                 ws_nv.column_dimensions[letter].width = 8
             else:
                 length = max(len(str(c.value) if c.value else "") for c in column_cells)
                 ws_nv.column_dimensions[letter].width = min(length + 2, 35)
         ws_nv.row_dimensions[1].height = get_header_row_height(header_row, width=8)
 
-        # Tô vàng nhạt các ô trống trong vùng Vào lần 1 → Ra lần 2
-        co_boi_vangnhat = False
+        # Tô vàng nhạt ô trống trong vùng Vào lần 1 -> Ra lần 2
+        co_boi = False
         for idx, row in enumerate(ws_nv.iter_rows(min_row=2, max_row=ws_nv.max_row - 1)):
             row_data = group.iloc[idx]
             region_row = row_data.iloc[idx_vao_lan_1:idx_ra_lan_2 + 1]
@@ -232,36 +356,113 @@ def page_tach_file():
                     cell = ws_nv.cell(row=idx + 2, column=idx_vao_lan_1 + 1 + offset)
                     if pd.isna(value) or str(value).strip() in ["", "nan", "NaT", "None"]:
                         cell.fill = pale_yellow_fill
-                        co_boi_vangnhat = True
+                        co_boi = True
             for cell in row:
                 cell.alignment = Alignment(wrap_text=True, vertical="center")
 
-        if co_boi_vangnhat:
+        if co_boi:
             ws_nv.sheet_properties.tabColor = "FFFACD"
             count_tab_vangnhat += 1
 
-    wb_new.save(output)
-    output.seek(0)
-    result_bytes = output.getvalue()
+    if count_nv == 0:
+        return None
 
-    # Lưu lại để chức năng 2 dùng trực tiếp, không cần upload lại
-    st.session_state["tach_output"] = result_bytes
+    out = BytesIO()
+    wb_new.save(out)
+    return out.getvalue(), count_nv, count_tab_vangnhat
 
-    status.success(f"✅ Đã xử lý xong {count_nv} nhân viên hợp lệ!")
-    progress.empty()
-    st.success(f"Đã tách xong! Tổng số nhân viên được tách sheet: **{count_nv}**")
-    st.info(f"Số nhân viên có sheet bị bôi vàng nhạt (tab vàng nhạt): **{count_tab_vangnhat}**")
-    st.download_button(
-        "Tải file Excel tổng hợp rồi cảm ơn anh Jiang đi",
-        result_bytes,
-        "output_tong_hop.xlsx",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+
+def goto_mode_2():
+    st.session_state["mode"] = MODE_2
+
+
+def page_tach_file():
+    step_header(1, "Tải file chấm công gốc", "File Excel (.xlsx) có các sheet tên bắt đầu bằng “CT”.")
+    up = st.file_uploader(
+        "File chấm công gốc", type=["xlsx"], key="tach_uploader", label_visibility="collapsed"
     )
-    st.caption("💡 Có thể chuyển sang chức năng 2 ở thanh bên trái để xuất ảnh luôn từ file vừa tách.")
+    if up is None:
+        st.info("Chưa có file. Kéo thả file vào khung phía trên để bắt đầu.")
+        return
+
+    file_bytes = up.getvalue()
+    md5 = hashlib.md5(file_bytes).hexdigest()
+
+    try:
+        with st.spinner("Đang đọc file..."):
+            df, ct_sheets, idx_vao, idx_ra = load_attendance(file_bytes)
+    except ValueError as e:
+        st.error(str(e))
+        return
+    except Exception as e:
+        st.error(f"Không đọc được file. Hãy kiểm tra đây có phải file .xlsx hợp lệ không.\n\nChi tiết: {e}")
+        return
+
+    n_emp = df[["Mã NV", "Họ tên"]].dropna().drop_duplicates().shape[0]
+    stat_cards([
+        ("sheet CT được đọc", len(ct_sheets), ""),
+        ("dòng chấm công", f"{len(df):,}", ""),
+        ("nhân viên", n_emp, ""),
+    ])
+    with st.expander("Xem trước dữ liệu (30 dòng đầu)"):
+        st.dataframe(df.head(30).astype(str), use_container_width=True, hide_index=True)
+
+    step_header(2, "Tách theo nhân viên", "Mỗi nhân viên sẽ có 1 sheet riêng trong file Excel mới.")
+    run = st.button("Tách file", type="primary", key="tach_run")
+
+    if run:
+        bar = st.progress(0.0)
+        info = st.empty()
+
+        def on_progress(frac, text):
+            bar.progress(min(max(frac, 0.0), 1.0))
+            info.info(text)
+
+        try:
+            res = build_employee_workbook(df, idx_vao, idx_ra, on_progress)
+        except Exception as e:
+            bar.empty()
+            info.empty()
+            st.error(f"Có lỗi khi tách file.\n\nChi tiết: {e}")
+            return
+        bar.empty()
+        info.empty()
+
+        if res is None:
+            st.warning("Không có nhân viên nào có dữ liệu giờ vào/ra để tách.")
+            st.session_state.pop("tach_result", None)
+        else:
+            data, count_nv, count_tab = res
+            st.session_state["tach_result"] = {
+                "md5": md5, "bytes": data, "count": count_nv, "tabs": count_tab,
+            }
+            # Dùng lại ở chức năng 2
+            st.session_state["tach_output"] = data
+
+    result = st.session_state.get("tach_result")
+    if result and result["md5"] == md5:
+        step_header(3, "Tải kết quả")
+        stat_cards([
+            ("nhân viên đã tách sheet", result["count"], "good"),
+            ("sheet có ô trống (tab vàng nhạt)", result["tabs"], "warn" if result["tabs"] else ""),
+        ])
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            st.download_button(
+                "Tải file Excel tổng hợp",
+                result["bytes"],
+                "output_tong_hop.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+                use_container_width=True,
+            )
+        with c2:
+            st.button("Tiếp tục: xuất ảnh từ file này", on_click=goto_mode_2, use_container_width=True)
+        st.caption("Tải xong nhớ cảm ơn anh Jiang nhé 😄")
 
 
 # =====================================================================
-# HÀM DÙNG CHO CHỨC NĂNG 2: XUẤT BẢNG CÔNG RA ẢNH
+# CHỨC NĂNG 2: XUẤT BẢNG CÔNG RA ẢNH
 # =====================================================================
 def build_css(wm_size: int, sp_size: int) -> str:
     return f"""
@@ -777,188 +978,33 @@ def _read_ram():
     return cur_mb, peak_mb, sys_used_pct, sys_avail_mb, sys_total_mb
 
 
-def page_xuat_anh():
-    st.title("Xuất bảng công cho từng nhân viên - by Jiangvux")
+def hdr_key(h: str) -> str:
+    return f"hdr__{hashlib.md5(h.encode('utf-8')).hexdigest()[:10]}"
 
-    # -------------------- Sidebar config --------------------
-    st.sidebar.divider()
-    st.sidebar.header("⚙️ Cấu hình xuất ảnh")
 
-    device_scale = st.sidebar.slider(
-        "Độ nét (deviceScaleFactor) — càng cao càng nét nhưng nặng/chậm",
-        min_value=1.0, max_value=3.0, value=1.8, step=0.1,
-    )
-    auto_fit_width = st.sidebar.checkbox("Auto-fit chiều ngang (giảm thừa khung trắng)", value=True)
-    min_width = st.sidebar.number_input("Min width (px)", min_value=600, max_value=6000, value=980, step=10)
-    max_width = st.sidebar.number_input("Max width (px)", min_value=800, max_value=12000, value=3500, step=10)
-    wait_ms = st.sidebar.slider("Chờ layout sau setContent (ms)", min_value=0, max_value=300, value=60, step=10)
-    add_stt = st.sidebar.checkbox("Thêm cột STT", value=True)
-    threshold_hours = st.sidebar.number_input(
-        "Ngưỡng giờ chuẩn (>= ngưỡng thì để nguyên, < ngưỡng thì tô đỏ)",
-        min_value=0.0, max_value=24.0, value=float(DEFAULT_THRESHOLD), step=0.5,
-    )
-
-    st.sidebar.divider()
-    st.sidebar.subheader("Watermark / Stamp (đóng dấu)")
-    show_watermark = st.sidebar.checkbox("Hiển thị Watermark (giữa dưới)", value=True)
-    watermark_text = st.sidebar.text_input("Nội dung Watermark", value=DEFAULT_WATERMARK)
-    watermark_size = st.sidebar.slider("Cỡ chữ Watermark", 10, 30, 18)
-
-    show_stamp = st.sidebar.checkbox("Hiển thị Stamp (góc dưới trái)", value=True)
-    stamp_mode = st.sidebar.selectbox("Nội dung Stamp", ["Tên sheet", "Tên file ảnh", "Tùy chỉnh"], index=0)
-    stamp_custom = st.sidebar.text_input("Stamp tùy chỉnh", value="", disabled=(stamp_mode != "Tùy chỉnh"))
-    stamp_size = st.sidebar.slider("Cỡ chữ Stamp", 10, 26, 16)
-
-    st.sidebar.divider()
-    st.sidebar.subheader("🧩 Đổi tên cột khi xuất ảnh")
-    rename_enable = st.sidebar.checkbox("Bật đổi tên header khi xuất ảnh", value=True)
-    rename_rules = st.sidebar.text_area(
-        "Nhập mapping dạng: Tên cũ = Tên mới (mỗi dòng 1 mapping)",
-        value=DEFAULT_RENAME_RULES,
-        height=160,
-        disabled=(not rename_enable),
-    )
-    st.sidebar.caption("Gợi ý: nếu thấy chậm, giảm deviceScaleFactor xuống 1.4–1.8 và giảm số cột giữ lại.")
-
-    RENAME_MAP = parse_rename_rules(rename_rules) if rename_enable else {}
-
-    def rename_header_for_output(h: str) -> str:
-        if not rename_enable or not RENAME_MAP:
-            return h
-        return RENAME_MAP.get(_norm_key(h), h)
-
-    # -------------------- RAM UI --------------------
-    mem_box = st.sidebar.expander("📈 RAM đang dùng", expanded=True)
-    mem_placeholder = mem_box.empty()
-    mem_state = {"peak": 0.0, "t0": time.perf_counter()}
-
-    def render_mem_ui(cur_mb, peak_mb, sys_used_pct, sys_avail_mb, sys_total_mb):
-        lines = []
-        if cur_mb is not None:
-            lines.append(f"**RAM process (hiện tại):** `{cur_mb:.0f} MB`")
-        else:
-            lines.append("**RAM process (hiện tại):** `—` *(cài psutil để đo chuẩn)*")
-        if peak_mb is not None:
-            lines.append(f"**RAM process (peak):** `{peak_mb:.0f} MB`")
-        if sys_used_pct is not None and sys_avail_mb is not None and sys_total_mb is not None:
-            lines.append(f"**RAM hệ thống:** `{sys_used_pct:.0f}%` — còn `{sys_avail_mb:.0f}/{sys_total_mb:.0f} MB`")
-        else:
-            lines.append("**RAM hệ thống:** `—`")
-        elapsed = time.perf_counter() - mem_state["t0"]
-        lines.append(f"**Thời gian chạy:** `{elapsed:.1f}s`")
-        mem_placeholder.markdown("\n\n".join(lines))
-
-    # -------------------- Nguồn file --------------------
-    has_prev = "tach_output" in st.session_state
-    source = "Upload file"
-    if has_prev:
-        source = st.radio(
-            "Nguồn file Excel tổng hợp",
-            ["Dùng file vừa tách ở chức năng 1", "Upload file"],
-            horizontal=True,
-        )
-
-    if source == "Upload file":
-        uploaded = st.file_uploader(
-            "Chọn file Excel đã tổng hợp (.xlsx)", type=["xlsx"], key="anh_uploader"
-        )
-        if not uploaded:
-            st.info("Hãy upload file Excel tổng hợp để bắt đầu.")
-            return
-        file_bytes = uploaded.getvalue()
+def _toggle_header(h: str):
+    s = set(st.session_state.get("selected_headers") or set())
+    if st.session_state.get(hdr_key(h)):
+        s.add(h)
     else:
-        file_bytes = st.session_state["tach_output"]
-        st.success("Đang dùng file tổng hợp vừa tách ở chức năng 1.")
+        s.discard(h)
+    st.session_state.selected_headers = s
 
-    file_md5 = hashlib.md5(file_bytes).hexdigest()
 
-    if st.session_state.get("file_md5") != file_md5:
-        st.session_state.file_md5 = file_md5
-        st.session_state.wb = load_workbook(BytesIO(file_bytes), data_only=True)
-        st.session_state.all_headers = None
-        st.session_state.selected_headers = None
-        for k in list(st.session_state.keys()):
-            if isinstance(k, str) and k.startswith("hdr__"):
-                del st.session_state[k]
+def _set_all_headers(headers, value: bool):
+    st.session_state.selected_headers = set(headers) if value else set()
+    for h in headers:
+        st.session_state[hdr_key(h)] = value
 
-    wb = st.session_state.wb
 
-    # -------------------- Chọn cột --------------------
-    def hdr_key(h: str) -> str:
-        return f"hdr__{hashlib.md5(h.encode('utf-8')).hexdigest()[:10]}"
+def prepare_sheets(wb, selected_headers, opt, on_progress=None):
+    """Tạo danh sách (tên ảnh, HTML) cho từng sheet. Trả về (to_render, prepared, skipped, total_sheets)."""
+    rename_map = opt["rename_map"]
 
-    if st.session_state.get("all_headers") is None:
-        all_headers_tmp = []
-        for sn in wb.sheetnames:
-            ws = wb[sn]
-            first_row = list(ws.iter_rows(min_row=1, max_row=1, values_only=True))
-            if not first_row:
-                continue
-            headers = [normalize_header(x) for x in list(first_row[0])]
-            all_headers_tmp.extend([h for h in headers if h != ""])
-        st.session_state.all_headers = unique_preserve_order(all_headers_tmp)
+    def rename_header(h):
+        return rename_map.get(_norm_key(h), h) if rename_map else h
 
-    if st.session_state.get("selected_headers") is None:
-        st.session_state.selected_headers = set(st.session_state.all_headers)
-
-    all_headers = st.session_state.all_headers
-
-    st.subheader("Chọn cột muốn in ra ảnh")
-    st.caption("Tick cột nào thì ảnh sẽ giữ cột đó. Bỏ tick thì loại khỏi ảnh (áp dụng cho tất cả sheet).")
-
-    if not all_headers:
-        st.warning("Không tìm thấy header (dòng tiêu đề) trong file.")
-        return
-
-    colA, colB, colC = st.columns([1, 1, 3])
-    with colA:
-        if st.button("✅ Chọn tất cả"):
-            st.session_state.selected_headers = set(all_headers)
-            for h in all_headers:
-                st.session_state[hdr_key(h)] = True
-    with colB:
-        if st.button("🧹 Bỏ chọn tất cả"):
-            st.session_state.selected_headers = set()
-            for h in all_headers:
-                st.session_state[hdr_key(h)] = False
-
-    search = colC.text_input("🔎 Tìm cột", value="", placeholder="Ví dụ: lương, vào, ra, tăng ca...").strip().lower()
-    filtered_headers = [h for h in all_headers if (search in h.lower())] if search else all_headers
-
-    grid_cols = st.columns(4)
-    selected = set(st.session_state.selected_headers)
-
-    for i, h in enumerate(filtered_headers):
-        key = hdr_key(h)
-        if key not in st.session_state:
-            st.session_state[key] = (h in selected)
-        grid_cols[i % 4].checkbox(h, key=key)
-
-    selected_headers = {h for h in all_headers if st.session_state.get(hdr_key(h), False)}
-    st.session_state.selected_headers = selected_headers
-
-    st.divider()
-
-    btn_col1, btn_col2 = st.columns([1, 3])
-    with btn_col1:
-        render_clicked = st.button("🚀 Xuất File", type="primary", use_container_width=True)
-    with btn_col2:
-        st.caption("Sau khi chọn/bỏ cột xong, bấm nút để bắt đầu render PNG và tải ZIP.")
-
-    if not render_clicked:
-        st.info("🟦 Chọn cột xong thì bấm **🚀 Xuất File** để bắt đầu.")
-        return
-
-    if not selected_headers:
-        st.error("Bạn đang bỏ chọn hết cột. Hãy tick ít nhất 1 cột để xuất ảnh.")
-        return
-
-    # -------------------- Chuẩn bị HTML --------------------
-    progress = st.progress(0.0)
-    status = st.empty()
-
-    cfg_css = build_css(watermark_size, stamp_size)
-
+    cfg_css = build_css(opt["watermark_size"], opt["stamp_size"])
     to_render = []
     sheetnames = wb.sheetnames
     total_sheets = len(sheetnames)
@@ -966,7 +1012,8 @@ def page_xuat_anh():
     skipped = 0
 
     for idx_sheet, sheet_name in enumerate(sheetnames, start=1):
-        status.info(f"Đang chuẩn bị sheet {idx_sheet}/{total_sheets}: **{sheet_name}**")
+        if on_progress:
+            on_progress(idx_sheet / max(total_sheets, 1), f"Đang chuẩn bị sheet {idx_sheet}/{total_sheets}: {sheet_name}")
         ws = wb[sheet_name]
 
         data = []
@@ -985,7 +1032,6 @@ def page_xuat_anh():
 
         if len(data) < 2:
             skipped += 1
-            progress.progress(idx_sheet / max(total_sheets, 1))
             continue
 
         for r in range(len(data)):
@@ -996,14 +1042,11 @@ def page_xuat_anh():
 
         keep_cols = [j for j in range(max_cols)
                      if any(not is_empty_value(data[i][j]) for i in range(1, len(data)))]
-
         if not keep_cols:
             skipped += 1
-            progress.progress(idx_sheet / max(total_sheets, 1))
             continue
 
         headers_full = [normalize_header(data[0][j]) for j in keep_cols]
-
         keep_cols2 = []
         headers2 = []
         for j, hname in zip(keep_cols, headers_full):
@@ -1013,7 +1056,6 @@ def page_xuat_anh():
 
         if not keep_cols2:
             skipped += 1
-            progress.progress(idx_sheet / max(total_sheets, 1))
             continue
 
         body_rows_raw = [[data[i][j] for j in keep_cols2] for i in range(1, len(data))]
@@ -1028,17 +1070,18 @@ def page_xuat_anh():
             if col_130 is None and is_col_130(h):
                 col_130 = i
 
-        headers_display = [rename_header_for_output(h) for h in headers2]
-        headers_out = (["STT"] + headers_display) if add_stt else headers_display
+        headers_display = [rename_header(h) for h in headers2]
+        headers_out = (["STT"] + headers_display) if opt["add_stt"] else headers_display
 
         rows_for_html = []
         stt_counter = 0
+        threshold = float(opt["threshold"])
 
         for r_idx, row in enumerate(body_rows_raw):
             is_total = is_total_row(row)
 
             stt_val = ""
-            if add_stt and (not is_total):
+            if opt["add_stt"] and (not is_total):
                 stt_counter += 1
                 stt_val = str(stt_counter)
 
@@ -1048,19 +1091,17 @@ def page_xuat_anh():
             if (not is_total) and (col_100 is not None) and (col_130 is not None):
                 raw100 = row[col_100]
                 raw130 = row[col_130]
-                has_data = (not is_empty_value(raw100)) or (not is_empty_value(raw130))
-                if has_data:
-                    if (parse_float(raw100) + parse_float(raw130)) < float(threshold_hours):
+                if (not is_empty_value(raw100)) or (not is_empty_value(raw130)):
+                    if (parse_float(raw100) + parse_float(raw130)) < threshold:
                         low_bg_cols.add(col_100)
                         low_bg_cols.add(col_130)
             elif (not is_total) and (col_100 is not None) and (col_130 is None):
                 raw100 = row[col_100]
-                if not is_empty_value(raw100):
-                    if parse_float(raw100) < float(threshold_hours):
-                        low_text_cols.add(col_100)
+                if not is_empty_value(raw100) and parse_float(raw100) < threshold:
+                    low_text_cols.add(col_100)
 
             cells = []
-            if add_stt:
+            if opt["add_stt"]:
                 cells.append({
                     "value_html": html.escape(stt_val),
                     "highlight": False, "lowhour": False, "lowtext": False,
@@ -1081,12 +1122,12 @@ def page_xuat_anh():
         base_name = safe_sheet_filename(sheet_name)
         fname = f"{prepared + 1}_{base_name}.png"
 
-        if stamp_mode == "Tên sheet":
+        if opt["stamp_mode"] == "Tên sheet":
             stamp_text = base_name
-        elif stamp_mode == "Tên file ảnh":
+        elif opt["stamp_mode"] == "Tên file ảnh":
             stamp_text = fname
         else:
-            stamp_text = (stamp_custom or "").strip()
+            stamp_text = (opt["stamp_custom"] or "").strip()
 
         html_doc = build_html(
             sheet_name=sheet_name,
@@ -1094,87 +1135,283 @@ def page_xuat_anh():
             rows=rows_for_html,
             stamp_text=stamp_text,
             cfg_css=cfg_css,
-            watermark=watermark_text,
-            show_wm=show_watermark,
-            show_st=show_stamp,
+            watermark=opt["watermark_text"],
+            show_wm=opt["show_watermark"],
+            show_st=opt["show_stamp"],
         )
 
         to_render.append((fname, html_doc))
         prepared += 1
-        progress.progress(idx_sheet / max(total_sheets, 1))
 
-    status.info("Đang xuất file ảnh (Chromium)...")
+    return to_render, prepared, skipped, total_sheets
 
-    if not to_render:
-        st.warning("Không có sheet nào có cột được chọn để xuất ảnh.")
+
+def page_xuat_anh():
+    # ---------- Bước 1: chọn nguồn file ----------
+    step_header(1, "Chọn file Excel tổng hợp", "Là file kết quả của chức năng “Tách file chấm công”.")
+
+    source = "Tải file lên"
+    if "tach_output" in st.session_state:
+        source = st.radio(
+            "Nguồn file",
+            ["Dùng file vừa tách", "Tải file lên"],
+            horizontal=True,
+            label_visibility="collapsed",
+            key="anh_source",
+        )
+
+    if source == "Tải file lên":
+        uploaded = st.file_uploader(
+            "File Excel tổng hợp", type=["xlsx"], key="anh_uploader", label_visibility="collapsed"
+        )
+        if not uploaded:
+            st.info("Chưa có file. Kéo thả file Excel tổng hợp vào khung phía trên để bắt đầu.")
+            return
+        file_bytes = uploaded.getvalue()
+    else:
+        file_bytes = st.session_state["tach_output"]
+        st.success("Đang dùng file tổng hợp vừa tách ở chức năng 1.")
+
+    file_md5 = hashlib.md5(file_bytes).hexdigest()
+
+    if st.session_state.get("file_md5") != file_md5:
+        try:
+            with st.spinner("Đang đọc file..."):
+                wb_loaded = load_workbook(BytesIO(file_bytes), data_only=True)
+        except Exception as e:
+            st.error(f"Không đọc được file. Hãy kiểm tra đây có phải file .xlsx hợp lệ không.\n\nChi tiết: {e}")
+            return
+        st.session_state.file_md5 = file_md5
+        st.session_state.wb = wb_loaded
+        st.session_state.all_headers = None
+        st.session_state.selected_headers = None
+        st.session_state.pop("anh_result", None)
+        for k in list(st.session_state.keys()):
+            if isinstance(k, str) and k.startswith("hdr__"):
+                del st.session_state[k]
+
+    wb = st.session_state.wb
+
+    if st.session_state.get("all_headers") is None:
+        tmp = []
+        for sn in wb.sheetnames:
+            ws = wb[sn]
+            first_row = list(ws.iter_rows(min_row=1, max_row=1, values_only=True))
+            if not first_row:
+                continue
+            headers = [normalize_header(x) for x in list(first_row[0])]
+            tmp.extend([h for h in headers if h != ""])
+        st.session_state.all_headers = unique_preserve_order(tmp)
+
+    if st.session_state.get("selected_headers") is None:
+        st.session_state.selected_headers = set(st.session_state.all_headers)
+
+    all_headers = st.session_state.all_headers
+    if not all_headers:
+        st.warning("Không tìm thấy dòng tiêu đề trong file. Dòng đầu tiên của mỗi sheet cần là tên các cột.")
         return
 
-    # -------------------- Render + ZIP --------------------
-    render_bar = st.progress(0.0)
-    render_text = st.empty()
+    stat_cards([("sheet trong file", len(wb.sheetnames), ""), ("cột khác nhau", len(all_headers), "")])
 
-    def progress_cb(done, total, current_name):
-        done = max(0, min(done, total))
-        pct = 0.0 if total == 0 else done / total
-        render_bar.progress(pct)
-        render_text.info(f"Render {done}/{total}: **{current_name}**")
+    # ---------- Bước 2: chọn cột ----------
+    step_header(2, "Chọn cột hiển thị trên ảnh", "Tick cột nào thì ảnh giữ cột đó. Áp dụng cho tất cả sheet.")
 
-        if (done == 0) or (done == total) or (done % 3 == 0):
-            cur_mb, peak_mb, sys_used_pct, sys_avail_mb, sys_total_mb = _read_ram()
-            if cur_mb is not None:
-                mem_state["peak"] = max(mem_state["peak"], cur_mb)
-            if peak_mb is not None:
-                mem_state["peak"] = max(mem_state["peak"], peak_mb)
-            render_mem_ui(cur_mb, mem_state["peak"], sys_used_pct, sys_avail_mb, sys_total_mb)
+    with st.container(border=True):
+        cA, cB, cC = st.columns([1, 1, 3])
+        cA.button("Chọn tất cả", on_click=_set_all_headers, args=(all_headers, True), use_container_width=True)
+        cB.button("Bỏ chọn tất cả", on_click=_set_all_headers, args=(all_headers, False), use_container_width=True)
+        search = cC.text_input(
+            "Tìm cột", value="", placeholder="Tìm cột… ví dụ: lương, vào, ra, tăng ca",
+            label_visibility="collapsed",
+        ).strip().lower()
 
-    spool = SpooledTemporaryFile(max_size=64 * 1024 * 1024)
-    exported_count = 0
+        filtered = [h for h in all_headers if (search in h.lower())] if search else all_headers
 
-    try:
-        with zipfile.ZipFile(spool, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as z:
-            exported_count = run_async(
-                render_html_list_to_zip(
-                    to_render,
-                    z,
-                    progress_cb=progress_cb,
-                    dsf=device_scale,
-                    auto_fit=auto_fit_width,
-                    min_w=int(min_width),
-                    max_w=int(max_width),
-                    wait_ms=int(wait_ms),
-                )
+        grid = st.columns(3)
+        master = set(st.session_state.selected_headers)
+        for i, h in enumerate(filtered):
+            key = hdr_key(h)
+            if key not in st.session_state:
+                st.session_state[key] = (h in master)
+            grid[i % 3].checkbox(h, key=key, on_change=_toggle_header, args=(h,))
+        if search and not filtered:
+            st.caption("Không có cột nào khớp từ khóa.")
+
+    selected_headers = set(st.session_state.selected_headers)
+    st.caption(f"Đã chọn {len(selected_headers)}/{len(all_headers)} cột")
+
+    # ---------- Bước 3: tùy chỉnh ----------
+    step_header(3, "Tùy chỉnh ảnh", "Không bắt buộc. Có thể bỏ qua nếu dùng cấu hình mặc định.")
+
+    with st.expander("Mở tùy chỉnh"):
+        t1, t2, t3, t4 = st.tabs(["Chất lượng ảnh", "Bảng công", "Watermark & dấu", "Đổi tên cột"])
+        with t1:
+            device_scale = st.slider("Độ nét (càng cao càng nét nhưng chạy chậm)", 1.0, 3.0, 1.8, 0.1)
+            wait_ms = st.slider("Chờ trang hiển thị xong (ms)", 0, 300, 60, 10)
+            auto_fit_width = st.checkbox("Tự co giãn chiều ngang cho vừa bảng", value=True)
+            w1, w2 = st.columns(2)
+            min_width = w1.number_input("Chiều ngang tối thiểu (px)", min_value=600, max_value=6000, value=980, step=10)
+            max_width = w2.number_input("Chiều ngang tối đa (px)", min_value=800, max_value=12000, value=3500, step=10)
+            st.caption("Gợi ý: nếu chạy chậm, giảm độ nét xuống 1.4–1.8 và bỏ bớt cột.")
+        with t2:
+            add_stt = st.checkbox("Thêm cột STT", value=True)
+            threshold_hours = st.number_input(
+                "Ngưỡng giờ chuẩn (nhỏ hơn ngưỡng thì tô đỏ)",
+                min_value=0.0, max_value=24.0, value=float(DEFAULT_THRESHOLD), step=0.5,
             )
-    except Exception as e:
-        st.error(f"Lỗi render Chromium.\n\nChi tiết: {e}")
-        return
+        with t3:
+            show_watermark = st.checkbox("Hiện watermark (giữa, phía dưới)", value=True)
+            watermark_text = st.text_input("Nội dung watermark", value=DEFAULT_WATERMARK)
+            watermark_size = st.slider("Cỡ chữ watermark", 10, 30, 18)
+            st.divider()
+            show_stamp = st.checkbox("Hiện dấu (góc dưới bên trái)", value=True)
+            stamp_mode = st.selectbox("Nội dung dấu", ["Tên sheet", "Tên file ảnh", "Tùy chỉnh"], index=0)
+            stamp_custom = st.text_input("Nội dung dấu tùy chỉnh", value="", disabled=(stamp_mode != "Tùy chỉnh"))
+            stamp_size = st.slider("Cỡ chữ dấu", 10, 26, 16)
+        with t4:
+            rename_enable = st.checkbox("Đổi tên tiêu đề cột khi xuất ảnh", value=True)
+            rename_rules = st.text_area(
+                "Mỗi dòng 1 cặp: Tên cũ = Tên mới",
+                value=DEFAULT_RENAME_RULES,
+                height=170,
+                disabled=(not rename_enable),
+            )
 
-    render_bar.empty()
-    render_text.empty()
+    opt = {
+        "rename_map": parse_rename_rules(rename_rules) if rename_enable else {},
+        "watermark_size": watermark_size,
+        "stamp_size": stamp_size,
+        "add_stt": add_stt,
+        "threshold": threshold_hours,
+        "stamp_mode": stamp_mode,
+        "stamp_custom": stamp_custom,
+        "watermark_text": watermark_text,
+        "show_watermark": show_watermark,
+        "show_stamp": show_stamp,
+    }
 
-    spool.seek(0)
-    zip_bytes = spool.read()
-    zip_mb = len(zip_bytes) / (1024 * 1024)
+    # ---------- Bước 4: xuất ảnh ----------
+    step_header(4, "Xuất ảnh", "Mỗi sheet thành 1 ảnh PNG, nén chung trong 1 file ZIP.")
 
-    status.success(
-        f"✅ Xong! Chuẩn bị {prepared}/{total_sheets} sheet (bỏ qua {skipped}), "
-        f"đã xuất **{exported_count}** ảnh. ZIP ~ **{zip_mb:.2f} MB**"
-    )
+    mem_box = st.expander("Thông tin hệ thống (RAM)")
+    mem_placeholder = mem_box.empty()
+    mem_state = {"peak": 0.0, "t0": time.perf_counter()}
 
-    st.download_button(
-        "📥 Tải ZIP ảnh PNG",
-        data=zip_bytes,
-        file_name="bang_cong_png.zip",
-        mime="application/zip",
-    )
+    def render_mem_ui(cur_mb, peak_mb, sys_used_pct, sys_avail_mb, sys_total_mb):
+        lines = []
+        lines.append(f"**RAM tiến trình (hiện tại):** `{cur_mb:.0f} MB`" if cur_mb is not None
+                     else "**RAM tiến trình (hiện tại):** `—`")
+        if peak_mb is not None:
+            lines.append(f"**RAM tiến trình (cao nhất):** `{peak_mb:.0f} MB`")
+        if sys_used_pct is not None and sys_avail_mb is not None and sys_total_mb is not None:
+            lines.append(f"**RAM hệ thống:** `{sys_used_pct:.0f}%` — còn `{sys_avail_mb:.0f}/{sys_total_mb:.0f} MB`")
+        lines.append(f"**Thời gian chạy:** `{time.perf_counter() - mem_state['t0']:.1f}s`")
+        mem_placeholder.markdown("\n\n".join(lines))
+
+    render_clicked = st.button("Xuất ảnh", type="primary", key="anh_run")
+
+    if render_clicked:
+        if not selected_headers:
+            st.error("Bạn đang bỏ chọn hết cột. Hãy chọn ít nhất 1 cột ở bước 2.")
+            return
+
+        bar = st.progress(0.0)
+        status = st.empty()
+
+        def on_prep(frac, text):
+            bar.progress(min(max(frac, 0.0), 1.0) * 0.3)
+            status.info(text)
+
+        to_render, prepared, skipped, total_sheets = prepare_sheets(wb, selected_headers, opt, on_prep)
+
+        if not to_render:
+            bar.empty()
+            status.empty()
+            st.warning("Không có sheet nào chứa các cột đã chọn. Hãy chọn thêm cột ở bước 2.")
+            return
+
+        def progress_cb(done, total, current_name):
+            done = max(0, min(done, total))
+            pct = 0.0 if total == 0 else done / total
+            bar.progress(0.3 + 0.7 * pct)
+            status.info(f"Đang xuất ảnh {done}/{total}: {current_name}")
+
+            if (done == 0) or (done == total) or (done % 3 == 0):
+                cur_mb, peak_mb, sys_used_pct, sys_avail_mb, sys_total_mb = _read_ram()
+                if cur_mb is not None:
+                    mem_state["peak"] = max(mem_state["peak"], cur_mb)
+                if peak_mb is not None:
+                    mem_state["peak"] = max(mem_state["peak"], peak_mb)
+                render_mem_ui(cur_mb, mem_state["peak"], sys_used_pct, sys_avail_mb, sys_total_mb)
+
+        spool = SpooledTemporaryFile(max_size=64 * 1024 * 1024)
+        exported_count = 0
+        try:
+            with zipfile.ZipFile(spool, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as z:
+                exported_count = run_async(
+                    render_html_list_to_zip(
+                        to_render,
+                        z,
+                        progress_cb=progress_cb,
+                        dsf=device_scale,
+                        auto_fit=auto_fit_width,
+                        min_w=int(min_width),
+                        max_w=int(max_width),
+                        wait_ms=int(wait_ms),
+                    )
+                )
+        except Exception as e:
+            bar.empty()
+            status.empty()
+            st.error(f"Không xuất được ảnh (lỗi trình duyệt Chromium).\n\nChi tiết: {e}")
+            return
+
+        bar.empty()
+        status.empty()
+
+        spool.seek(0)
+        zip_bytes = spool.read()
+        st.session_state["anh_result"] = {
+            "md5": file_md5,
+            "zip": zip_bytes,
+            "exported": exported_count,
+            "prepared": prepared,
+            "skipped": skipped,
+            "total": total_sheets,
+        }
+
+    res = st.session_state.get("anh_result")
+    if res and res["md5"] == file_md5:
+        st.success("Đã xuất xong. Tải file ZIP bên dưới.")
+        stat_cards([
+            ("ảnh đã xuất", res["exported"], "good"),
+            ("sheet bị bỏ qua", res["skipped"], "warn" if res["skipped"] else ""),
+            ("dung lượng ZIP", f"{len(res['zip']) / (1024 * 1024):.1f} MB", ""),
+        ])
+        st.download_button(
+            "Tải ZIP ảnh PNG",
+            data=res["zip"],
+            file_name="bang_cong_png.zip",
+            mime="application/zip",
+            type="primary",
+        )
 
 
 # =====================================================================
-# MAIN: CHỌN CHỨC NĂNG
+# MAIN
 # =====================================================================
-st.sidebar.header("📌 Chọn chức năng")
-mode = st.sidebar.radio("Chức năng", [MODE_1, MODE_2], label_visibility="collapsed")
+inject_css()
+hero()
 
-if mode == MODE_1:
+if "mode" not in st.session_state:
+    st.session_state["mode"] = MODE_1
+
+st.radio("Chức năng", [MODE_1, MODE_2], key="mode", horizontal=True, label_visibility="collapsed")
+st.markdown(f'<div class="mode-hint">{html.escape(MODE_HINT[st.session_state["mode"]])}</div>', unsafe_allow_html=True)
+
+if st.session_state["mode"] == MODE_1:
     page_tach_file()
 else:
     page_xuat_anh()
+
+st.markdown('<div class="footer-note">Production by Jiangvux</div>', unsafe_allow_html=True)
