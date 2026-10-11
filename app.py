@@ -1460,6 +1460,18 @@ def require_login():
         pw = st.text_input("Mật khẩu", type="password", label_visibility="collapsed", placeholder="Mật khẩu")
         submitted = st.form_submit_button("Đăng nhập", type="primary")
 
+    # Gợi ý mật khẩu (tùy chọn): đặt APP_HINT trong Streamlit Secrets, không ghi trong code
+    try:
+        hint = str(st.secrets.get("APP_HINT", "")).strip()
+    except Exception:
+        hint = ""
+    if hint:
+        st.markdown(
+            f'<div style="margin-top:.5rem;color:#5B6B73;font-size:.92rem;">Gợi ý mật khẩu: '
+            f'<b>{html.escape(hint)}</b></div>',
+            unsafe_allow_html=True,
+        )
+
     if submitted:
         if hmac.compare_digest(pw.encode("utf-8"), expected.encode("utf-8")):
             st.session_state["auth_ok"] = True
