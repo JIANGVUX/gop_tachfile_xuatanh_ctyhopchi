@@ -4,6 +4,7 @@ import html
 import math
 import os
 import re
+import shutil
 import sys
 import time
 import zipfile
@@ -868,6 +869,21 @@ def build_html(sheet_name: str, headers: list, rows: list, stamp_text: str, cfg_
 """
 
 
+def find_chromium():
+    """Tìm Chromium/Chrome cài sẵn trên hệ thống (ưu tiên hơn bản pyppeteer tự tải)."""
+    env_path = os.environ.get("CHROME_PATH") or os.environ.get("CHROMIUM_PATH")
+    if env_path and os.path.exists(env_path):
+        return env_path
+    for name in ("chromium", "chromium-browser", "google-chrome", "google-chrome-stable"):
+        found = shutil.which(name)
+        if found:
+            return found
+    for path in ("/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"):
+        if os.path.exists(path):
+            return path
+    return None
+
+
 async def render_html_list_to_zip(
     html_list,
     zip_file,
@@ -880,11 +896,12 @@ async def render_html_list_to_zip(
 ):
     from pyppeteer import launch
 
-    browser = await launch(
+    launch_kwargs = dict(
         headless=True,
         handleSIGINT=False,
         handleSIGTERM=False,
         handleSIGHUP=False,
+        dumpio=True,  # in log của Chromium ra "Manage app" để dễ tìm lỗi
         args=[
             "--no-sandbox",
             "--disable-setuid-sandbox",
@@ -894,6 +911,10 @@ async def render_html_list_to_zip(
             "--disable-features=IsolateOrigins,site-per-process",
         ],
     )
+    exe = find_chromium()
+    if exe:
+        launch_kwargs["executablePath"] = exe
+    browser = await launch(**launch_kwargs)
 
     exported = 0
     try:
@@ -1363,7 +1384,7 @@ def page_xuat_anh():
         except Exception as e:
             bar.empty()
             status.empty()
-            st.error(f"Không xuất được ảnh (lỗi trình duyệt Chromium).\n\nChi tiết: {e}")
+            st.error(f"Không xuất được ảnh (lỗi trình duyệt Chromium).\n\nChi tiết: {e}\n\nKiểm tra file packages.txt có dòng `chromium` và xem log trong Manage app.")
             return
 
         bar.empty()
