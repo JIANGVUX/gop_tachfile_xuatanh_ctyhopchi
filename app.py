@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import hmac
 import html
 import math
 import os
@@ -1329,6 +1330,12 @@ def page_xuat_anh():
         lines.append(f"**Thời gian chạy:** `{time.perf_counter() - mem_state['t0']:.1f}s`")
         mem_placeholder.markdown("\n\n".join(lines))
 
+    # Hiện RAM ngay khi mở, không đợi đến lúc xuất ảnh
+    _cur, _peak, _pct, _avail, _total = _read_ram()
+    if _cur is not None:
+        mem_state["peak"] = max(mem_state["peak"], _cur)
+    render_mem_ui(_cur, mem_state["peak"] if _cur is not None else _peak, _pct, _avail, _total)
+
     render_clicked = st.button("Xuất ảnh", type="primary", key="anh_run")
 
     if render_clicked:
@@ -1419,10 +1426,67 @@ def page_xuat_anh():
 
 
 # =====================================================================
+# ĐĂNG NHẬP BẰNG MẬT KHẨU
+# =====================================================================
+MAX_FAILS = 5
+LOCK_SECONDS = 60
+
+
+def require_login():
+    """Chặn toàn bộ app cho đến khi nhập đúng mật khẩu (lưu trong Streamlit Secrets: APP_PASSWORD)."""
+    if st.session_state.get("auth_ok"):
+        return
+
+    try:
+        expected = str(st.secrets["APP_PASSWORD"])
+    except Exception:
+        expected = ""
+
+    if not expected:
+        st.error(
+            "Chưa cấu hình mật khẩu cho app. Vào Streamlit Cloud → Settings → Secrets "
+            "và thêm dòng: APP_PASSWORD = \"mật-khẩu-của-bạn\""
+        )
+        st.stop()
+
+    locked_until = st.session_state.get("lock_until", 0.0)
+    now = time.time()
+    if now < locked_until:
+        st.error(f"Nhập sai quá nhiều lần. Thử lại sau {int(locked_until - now) + 1} giây.")
+        st.stop()
+
+    step_header(1, "Đăng nhập", "Nhập mật khẩu để sử dụng công cụ.")
+    with st.form("login_form"):
+        pw = st.text_input("Mật khẩu", type="password", label_visibility="collapsed", placeholder="Mật khẩu")
+        submitted = st.form_submit_button("Đăng nhập", type="primary")
+
+    if submitted:
+        if hmac.compare_digest(pw.encode("utf-8"), expected.encode("utf-8")):
+            st.session_state["auth_ok"] = True
+            st.session_state["auth_fail"] = 0
+            st.rerun()
+        else:
+            fails = st.session_state.get("auth_fail", 0) + 1
+            st.session_state["auth_fail"] = fails
+            if fails >= MAX_FAILS:
+                st.session_state["lock_until"] = time.time() + LOCK_SECONDS
+                st.session_state["auth_fail"] = 0
+                st.error(f"Nhập sai {MAX_FAILS} lần. Đã khóa {LOCK_SECONDS} giây.")
+            else:
+                st.error(f"Mật khẩu chưa đúng. Còn {MAX_FAILS - fails} lần thử.")
+    st.stop()
+
+
+def logout():
+    st.session_state["auth_ok"] = False
+
+
+# =====================================================================
 # MAIN
 # =====================================================================
 inject_css()
 hero()
+require_login()
 
 if "mode" not in st.session_state:
     st.session_state["mode"] = MODE_1
@@ -1436,3 +1500,4 @@ else:
     page_xuat_anh()
 
 st.markdown('<div class="footer-note">Production by Jiangvux</div>', unsafe_allow_html=True)
+st.button("Đăng xuất", on_click=logout, key="logout_btn")
